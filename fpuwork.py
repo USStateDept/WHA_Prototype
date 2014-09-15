@@ -1,4 +1,10 @@
 
+#to do
+# - Optimize memory for SNA draw by removing the repeated links
+# - Check the different coding of Arrival, departure, etc.
+# - Remove/Add necessary variables
+# - pickle object for future use
+# - parallel process for Levenshtein
 
 import sys, getopt, csv
 import os
@@ -27,7 +33,7 @@ import matplotlib.pyplot as plt
 
 BASEDIR = os.path.dirname(os.path.realpath(__file__))
 
-INPUT = BASEDIR + "\\fpuinput\\fputestdata_dedup.csv"
+INPUT = BASEDIR + "\\fpuinput\\fputestdata_dedup_sub.csv"
 WORKINGDIR = BASEDIR + "\\fpuworking"
 OUTPUT = BASEDIR + "\\fpuoutput"
 
@@ -193,9 +199,7 @@ class Person():
         self.vector['meanlengthofstay'] = np.mean(np.trim_zeros(np.array(lenofstay)))
         self.vector['age'] = self.age
         self.vector['travelevents'] = 0
-        self.vector['suspiciousevent'] = 0
         for event in self.eventHistory:
-            self.vector['travelevents'] +=0
             if (event.suspicious):
                 self.vector['suspiciousevent'] +=1
 
@@ -649,6 +653,8 @@ peopleDataVectorized = np.nan_to_num(peopleVectorizer.fit_transform(peopleDictVe
 PCAevents(peopleDataVectorized)
 
 
+del peopleDictVector
+del peopleVectorizer
 
 
 
