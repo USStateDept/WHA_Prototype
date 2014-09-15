@@ -18,11 +18,14 @@ from scipy.cluster.vq import kmeans,vq
 from scipy.spatial import distance
 from sklearn.preprocessing import LabelEncoder
 
+
+import matplotlib.pyplot as plt
+
 BASEDIR = os.path.dirname(os.path.realpath(__file__))
 
 INPUT = BASEDIR + "\\fpuinput\\fputestdata_dedup_sub.csv"
-WORKINGDIR = BASEDIR + "\\working"
-OUTPUT = BASEDIR + "\\output"
+WORKINGDIR = BASEDIR + "\\fpuworking"
+OUTPUT = BASEDIR + "\\fpuoutput"
 
 
 
@@ -73,13 +76,25 @@ class Person():
             self.fin_id.append(lineobj['FIN'])
 
         try:
-            self.DOB = parse(lineobj['DOB'].replace("-", "/"))
-            self.age = (datetime.datetime.now() - self.DOB).years
-            print self.age
+            self.DOB = parse(lineobj['DOB'].replace("-", "-1-"))
         except:
-            print lineobj['DOB'].replace("-", "/")
-            print "failed DOB parse"
             self.DOB = None
+        if not self.DOB:
+            try:
+                self.DOB = parse(lineobj['DOB'].split("-")[1] + "/1/" + lineobj['DOB'].split("-")[0])
+            except:
+                self.DOB = None
+                print "failed to parse"
+        try:
+            if self.DOB:
+                self.age = int((datetime.now() - self.DOB).days/365)
+            else:
+                self.age = None
+        except:
+            print "failed to calulcate age"
+            self.age = None
+
+
         self.countryissue.append(lineobj['DOCUMENT_COUNTRY_ISSUE'])
         self.gender = lineobj['GENDER_CODE']
         personList.append(self)
@@ -166,14 +181,22 @@ class Person():
     def vectorize(self):
         self.vector['numtrips'] = len(self.eventHistory)
         lenofstay = []
-        numsuspciousevents = []
         for event in self.eventHistory:
             if event.lengthofstay != None:
                 lenofstay.append(event.lengthofstay)
-        self.vector['lengthofstay'] = np.mean(lenofstay)
-        #avg length of stay
-        #age
-        #num suspicious events
+        self.vector['meanlengthofstay'] = np.mean(np.trim_zeros(np.array(lenofstay)))
+        self.vector['age'] = self.age
+        self.vector['travelevents'] = 0
+        self.vector['suspiciousevent'] = 0
+        for event in self.eventHistory:
+            self.vector['travelevents'] +=0
+            if (event.suspicious):
+                self.vector['suspiciousevent'] +=1
+
+    def getVectorDict(self):
+        return self.vector
+
+
 
 
 
@@ -252,6 +275,9 @@ class Event():
         self.vector['i94Num'] = self.i94Num
         self.vector['lengthofstay'] = self.lengthofstay
 
+    def getVectorDict(self):
+        return self.vector
+
 
 masterEventsList  = []
 def getAllEvents(masterEventsList):
@@ -284,7 +310,7 @@ def buildEncodedLabels(masterEventsList):
     for person in personList:
         temppersonobj.append(person.gender)
 
-    genderEncoder.fit_transform(temppersonobj)
+    genderTranformed = genderEncoder.fit_transform(temppersonobj)
 
     masterEventsList = getAllEvents(masterEventsList)
 
@@ -294,7 +320,7 @@ def buildEncodedLabels(masterEventsList):
             templist.append(getattr(tempevent,en))
         eventEncoders[en].fit(templist)
 
-    return (genderEncoder, eventEncoders)
+    return (genderTranformed, eventEncoders)
 
 
 
@@ -323,9 +349,145 @@ def vectorizeEvents(masterEventsList):
 
 
 
-def vectorizePeople():
-    for person in personList:
+def vectorizePeople(genderTranformed):
+    for person, gendervalue in zip(personList, genderTranformed):
         person.vectorize()
+        person.pushVector("gender", gendervalue)
+
+
+def printSuspiciousNarrative(suspiciousnarrative):
+    with open(OUTPUT + "\\suspiciousnarrative.txt", 'wb') as f:
+        for index in suspiciousnarrative.keys():
+            f.write(index + "\n")
+            for event in suspiciousnarrative[index]:
+                f.write(event +"\n")
+
+def printSummaryOutput(maincounts):
+    print OUTPUT + "\\summaryoutput.txt"
+    with open(OUTPUT + "\\summaryoutput.txt", 'wb') as f:
+        for index in maincounts.keys():
+            f.write(index + "  ***************\n")
+            f.write("Total Count: " + str(maincounts[index]['totnum']) + '\n')
+            f.write("Total Females: " + str(maincounts[index]['numfemales']) + '\n')
+            f.write("Total Males: " + str(maincounts[index]['nummales']) + '\n')
+
+            f.write("Mean Length of Stay: " + str(np.mean(np.trim_zeros(np.nan_to_num(maincounts[index]['meanlengthofstay'])))) + '\n')
+            f.write("Mean Age: " + str(np.mean(np.trim_zeros(maincounts[index]['meanage']))) + '\n')
+            f.write("Mean Travel Events: " + str(np.mean(np.trim_zeros(maincounts[index]['meantravelevents']))) + '\n')
+
+
+
+def summarystatsoutput(masterEventsList):
+    print "calculating summarystats"
+    suspiciousnarrative = {}
+    maincounts = {"people":{"totnum": 0, "numfemales":0, "nummales":0,"meanlengthofstay":[], "meanage":[], "meantravelevents":[]},\
+                  "suspicious":{"totnum": 0, "numfemales":0, "nummales":0,"meanlengthofstay":[], "meanage":[], "meantravelevents":[]},\
+                  "fraud":{"totnum": 0, "numfemales":0, "nummales":0,"meanlengthofstay":[], "meanage":[], "meantravelevents":[]}}
+    for person in personList:
+        if person.verifiedfraud:
+            maincounts['fraud']['totnum'] +=1
+            if person.gender == "M":
+                maincounts['fraud']['nummales'] +=1
+            else:
+                maincounts['fraud']['numfemales'] +=1
+            maincounts['fraud']['meanlengthofstay'].append(person.vector['meanlengthofstay'])
+            maincounts['fraud']['meanage'].append(person.vector['age'])
+            maincounts['fraud']['meantravelevents'].append(len(person.eventHistory))
+
+        if person.suspicious:
+            maincounts['suspicious']['totnum'] +=1
+            if person.gender == "M":
+                maincounts['suspicious']['nummales'] +=1
+            else:
+                maincounts['suspicious']['numfemales'] +=1
+
+            maincounts['suspicious']['meanlengthofstay'].append(person.vector['meanlengthofstay'])
+            maincounts['suspicious']['meanage'].append(person.vector['age'])
+            maincounts['suspicious']['meantravelevents'].append(len(person.eventHistory))
+
+            #collect the narrative
+            suspiciousnarrative[person.vd_id] = person.suspiciousRecord
+
+        maincounts['people']['totnum'] +=1
+        if person.gender == "M":
+            maincounts['people']['nummales'] +=1
+        else:
+            maincounts['people']['numfemales'] +=1
+
+        maincounts['people']['meanlengthofstay'].append(person.vector['meanlengthofstay'])
+        maincounts['people']['meanage'].append(person.vector['age'])
+        maincounts['people']['meantravelevents'].append(len(person.eventHistory))
+
+    printSuspiciousNarrative(suspiciousnarrative)
+
+    printSummaryOutput(maincounts)
+
+
+
+
+
+
+    #print narrative
+
+
+
+
+
+#start on the stats
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+#from matplotlib.mlab import PCA
+
+
+
+def PCAevents(eventDataVectorized):
+    PCAcalculator  = PCA( n_components=2)
+    fitModel = PCAcalculator.fit_transform(eventDataVectorized)
+    print "fit model", fitModel
+    print len(fitModel)
+    print "my x", len(fitModel[:,0])
+    print "my y", len(fitModel[:,1])
+    colors = []
+    for event in masterEventsList:
+        if event.verifiedfraud:
+            colors.append('r')
+        elif event.suspicious:
+            colors.append('b')
+        else:
+            colors.append('g')
+
+    plt.scatter(fitModel[:, 0], fitModel[:, 1], alpha=.5, s=20, color=colors)
+    plt.show()
+
+
+def PCApeople(peopleDataVectorized):
+    PCAcalculator  = PCA( n_components=2)
+    fitModel = PCAcalculator.fit_transform(peopleDataVectorized)
+    print "fit model", fitModel
+    print len(fitModel)
+    print "my x", len(fitModel[:,0])
+    print "my y", len(fitModel[:,1])
+    colors = []
+    for event in masterEventsList:
+        if event.verifiedfraud:
+            colors.append('r')
+        elif event.suspicious:
+            colors.append('b')
+        else:
+            colors.append('g')
+
+    plt.scatter(fitModel[:, 0], fitModel[:, 1], alpha=.5, s=20, color=colors)
+    plt.show()
+
+
+
+def performSNA(personList):
+    
+
+
+
+
+
 
 
 
@@ -396,17 +558,57 @@ for person in personList:
     #otyher checks
 
 
-genderEncoder, eventEncoders = buildEncodedLabels(masterEventsList)
+genderTranformed, eventEncoders = buildEncodedLabels(masterEventsList)
 
 vectorizeEvents(masterEventsList)
 
-vectorizePeople()
+vectorizePeople(genderTranformed)
+
+summarystatsoutput(masterEventsList)
+
+
+
+
+eventDictVector = []
+for events in masterEventsList:
+    eventDictVector.append(events.getVectorDict())
+
+eventVectorizer = DictVectorizer(sparse=False)
+
+eventDataVectorized = np.nan_to_num(eventVectorizer.fit_transform(eventDictVector))
+
+PCAevents(eventDataVectorized)
+
+
+
+#save on memory
+del eventDictVector
+del eventDataVectorized
+
+
+peopleDictVector = []
+for person in personList:
+    peopleDictVector.append(person.getVectorDict())
+
+peopleVectorizer = DictVectorizer(sparse=False)
+
+peopleDataVectorized = np.nan_to_num(peopleVectorizer.fit_transform(peopleDictVector))
+
+PCAevents(peopleDataVectorized)
+
+
+
 
 
 
 #check variables
 
 #apply model
+
+#common address listings
+performSNA(personList)
+
+
 
 #SNA
 
