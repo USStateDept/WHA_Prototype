@@ -18,12 +18,16 @@ from scipy.cluster.vq import kmeans,vq
 from scipy.spatial import distance
 from sklearn.preprocessing import LabelEncoder
 
+#import nltk
+from Levenshtein import distance as LevDistance
+
+
 
 import matplotlib.pyplot as plt
 
 BASEDIR = os.path.dirname(os.path.realpath(__file__))
 
-INPUT = BASEDIR + "\\fpuinput\\fputestdata_dedup_sub.csv"
+INPUT = BASEDIR + "\\fpuinput\\fputestdata_dedup.csv"
 WORKINGDIR = BASEDIR + "\\fpuworking"
 OUTPUT = BASEDIR + "\\fpuoutput"
 
@@ -55,6 +59,8 @@ class Person():
         self.verifiedfraud = False
 
         self.vector = {}
+
+        self.dedupaddresslist = []
 
     def get_or_create(self, lineobj):
         for person in personList:
@@ -196,11 +202,39 @@ class Person():
     def getVectorDict(self):
         return self.vector
 
+    def runDeDupAddress(self):
+        baseAddresses = []
+        for hist in self.eventHistory:
+            baseAddresses.append(hist.destAddress + ", " + hist.destCity + ", " + hist.destState)
+
+        self.dedupaddresslist = []
+        for baseAddressIndex in range(len(baseAddresses)):
+            keep = True
+            for checkAddressIndex in range(len(baseAddresses)):
+                if checkAddressIndex == baseAddressIndex:
+                    continue
+                        #number of chars that ened to be edited in order for it to be the same string
+                if LevDistance(baseAddresses[baseAddressIndex], baseAddresses[checkAddressIndex]) < 5:
+                    keep = False
+                    break
+            if keep:
+                self.dedupaddresslist.append(baseAddresses[baseAddressIndex])
 
 
+    def getMatchingAddress(self, personList):
 
+        matchlist = []
+        for person in personList:
+            if person.vd_id == self.vd_id:
+                continue
 
+            for targetaddress in person.dedupaddresslist:
+                for baseaddress in self.dedupaddresslist:
+                    if LevDistance(baseaddress, targetaddress) < 5:
+                        if person.vd_id not in matchlist:
+                            matchlist.append(person.vd_id)
 
+        return matchlist
 
 
 
@@ -439,6 +473,17 @@ import matplotlib.pyplot as plt
 #from matplotlib.mlab import PCA
 
 
+def getColors(thelist):
+    colors=[]
+    for item in thelist:
+        if item.verifiedfraud:
+            colors.append('r')
+        elif item.suspicious:
+            colors.append('b')
+        else:
+            colors.append('g')
+
+    return colors
 
 def PCAevents(eventDataVectorized):
     PCAcalculator  = PCA( n_components=2)
@@ -447,14 +492,7 @@ def PCAevents(eventDataVectorized):
     print len(fitModel)
     print "my x", len(fitModel[:,0])
     print "my y", len(fitModel[:,1])
-    colors = []
-    for event in masterEventsList:
-        if event.verifiedfraud:
-            colors.append('r')
-        elif event.suspicious:
-            colors.append('b')
-        else:
-            colors.append('g')
+    colors = getColors(masterEventsList)
 
     plt.scatter(fitModel[:, 0], fitModel[:, 1], alpha=.5, s=20, color=colors)
     plt.show()
@@ -467,23 +505,37 @@ def PCApeople(peopleDataVectorized):
     print len(fitModel)
     print "my x", len(fitModel[:,0])
     print "my y", len(fitModel[:,1])
-    colors = []
-    for event in masterEventsList:
-        if event.verifiedfraud:
-            colors.append('r')
-        elif event.suspicious:
-            colors.append('b')
-        else:
-            colors.append('g')
+    colors = getColors(personList)
 
     plt.scatter(fitModel[:, 0], fitModel[:, 1], alpha=.5, s=20, color=colors)
     plt.show()
 
-
+import networkx as nx
 
 def performSNA(personList):
-    
+    #find common addresses
+    addressG = nx.Graph()
+    traveldates = nx.Graph()
+    print "deduping addresses"
+    count = 0
+    for person in personList:
+        print float(count)/float(len(personList))*100
+        person.runDeDupAddress()
+        addressG.add_node(str(person.vd_id))
+        traveldates.add_node(str(person.vd_id))
 
+    print "findnig matches"
+    count = 0
+    for person in personList:
+        print float(count)/float(len(personList))*100
+        matchinglist = person.getMatchingAddress(personList)
+        for match in matchinglist:
+            addressG.add_edge(person.vd_id, match)
+        count += 1
+    plt.figure(1)
+    colors = getColors(personList)
+    nx.draw_spring(addressG, node_size =20, node_color = colors, linewidths =.1, alpha =.5, edge_color ="grey")
+    plt.show()
 
 
 
@@ -614,181 +666,3 @@ performSNA(personList)
 
 
 sys.exit(1)
-
-for person in personList:
-    print person.vd_id
-    print len(person.eventHistory)
-
-
-
-
-
-
-
-def vectorizeColumn(inputobj, fieldname):
-    dataset = []
-    #this could be more efficient
-    for feature in inputobj:
-        dataset.append(feature[fieldname])
-
-
-
-    vectorizer = TfidfVectorizer(sublinear_tf=True, max_df=0.5,stop_words='english')
-    km = KMeans(n_clusters=15, init='k-means++', max_iter=100, n_init=1,verbose=1)
-
-
-
-    X_test = vectorizer.fit_transform(dataset)
-    km.fit(X_test)
-    return km.labels_
-
-
-def normClients(featurevalue):
-    if featurevalue == '':
-        return 1
-    featurevalue = int(featurevalue.replace(",",""))
-    print featurevalue
-    if featurevalue < 100:
-        return 1
-    elif featurevalue < 500:
-        return 2
-    if featurevalue < 1000:
-        return 3
-    elif featurevalue < 2500:
-        return 4
-    if featurevalue < 5000:
-        return 5
-    elif featurevalue < 15000:
-        return 6
-    else:
-        return 7
-
-
-
-def vectorizeData(inputobj):
-
-
-    calcset = []
-    counter = 0
-    for feature in inputobj:
-        extras = {"Location":feature['Location'], "Eng":feature['Eng.'],"Spa":feature['Spa.']}
-        calcset.append({"label":feature['Institution'], "data":{}, "extras":extras})
-        inputobj[counter]['bow_sector'] = " ".join([feature['Sector 1'],feature['Sector 2'],feature['Sector 3'],feature['Sector 4']])
-        inputobj[counter]['bow_activity'] = " ".join([feature['Activity 1'],feature['Activity 2'],feature['Activity 3'],feature['Activity 4']])
-        inputobj[counter]['client_calc'] = normClients(feature[' Clients '])
-        counter += 1
-
-    vecresult_sector = vectorizeColumn(inputobj, "bow_sector")
-    vecresult_activity = vectorizeColumn(inputobj, "bow_sector")
-    for result_sector, result_activity, featureorig,calcset_index  in zip(vecresult_sector, vecresult_activity, inputobj, range(len(calcset))):
-        datadict = {"sector":result_sector, "activity":result_activity, "clients": featureorig['client_calc']}
-        calcset[calcset_index]['data'] = datadict
-
-    return calcset
-
-
-
-def calculateMeetings(calcset):
-
-    v = DictVectorizer(sparse=False)
-    datasetdict = []
-    for feature in calcset:
-        datasetdict.append(feature['data'])
-
-    X = v.fit_transform(datasetdict)
-    print "There will be ", int(len(datasetdict)/4), "groups"
-    km = KMeans(n_clusters=int(len(datasetdict)/4), init='k-means++', max_iter=100, n_init=1,verbose=1)
-    km.fit(X)
-
-    centroids,_ = kmeans(X,int(len(datasetdict)/4))
-    # assign each sample to a cluster
-    idx,_ = vq(X,centroids)
-
-    groupingresult = {}
-    for index, grouping in zip(range(len(calcset)),idx):
-        if str(grouping) in groupingresult.keys():
-            groupingresult[str(grouping)].append(calcset[index]['label'])
-        else:
-            groupingresult[str(grouping)] = [calcset[index]['label']]
-
-    return groupingresult
-    #get the distances between the centroids
-
-    #get distance between the sets
-    #dst = distance.euclidean(a,b)
-
-
-
-
-    #constraints
-
-
-
-
-
-    #fit to k-means++ with n/k components
-    #calculate distance to centroid and the preferred next centroids
-    #swap to fill
-    #iterate for each to return variance
-        #select candidate by distance to their centroid
-        #calculate distance to points that are close
-        #swap candidates and calculate new variance
-            #if better then keep it
-            #recalculate the distance to centroid and preferred next centroids
-    return
-
-def getInputObj():
-    with open (INPUT, 'rb') as csvfile:
-        thereader = csv.reader(csvfile)
-        isfirst = True
-        header = []
-        outputobj = []
-        for row in thereader:
-            if isfirst:
-                header = row
-                isfirst = False
-                continue
-            outputobj.append(dict(zip(header, row)))
-    return outputobj
-
-
-
-def main(argv):
-
-    try:
-        opts, args = getopt.getopt(argv,"c:",["command="])
-    except getopt.GetoptError:
-        print 'planmeetings.py -c <command> (cleandata, calculate)'
-        sys.exit(2)
-    for opt, arg in opts:
-      if opt == '-c':
-          if arg == "vectorize":
-              inputobj = getInputObj()
-              calcset = vectorizeData(inputobj)
-              with open(WORKINGDIR + "\\working.pickle", 'wb') as pickfile:
-                  pickle.dump( calcset, pickfile)
-              print "success"
-          elif arg == "calculate":
-              try:
-                  with open(WORKINGDIR + "\\working.pickle", 'rb') as pickfile:
-                      calcset = pickle.load(pickfile)
-              except:
-                  print "could not find worknig file, try vectorizing first"
-                  sys.exit()
-              groupingresult = calculateMeetings(calcset)
-              with open(OUTPUT + "\\output.txt", 'wb') as outputfile:
-                  for group_index in groupingresult.keys():
-                      outputfile.write(group_index + "\n")
-                      outputfile.write("-----------------" + "\n")
-                      for theresult in groupingresult[group_index]:
-                          outputfile.write(theresult + "\n")
-
-
-          else:
-              print 'planmeetings.py -c <command> (cleandata, calculate)'
-              sys.exit(2)
-
-if __name__ == "__main__":
-    main(sys.argv[1:])
-
-
